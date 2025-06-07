@@ -1,5 +1,6 @@
 import logging
 import os
+import json
 from abc import ABC, abstractmethod
 import typing
 from dataclasses import dataclass
@@ -34,7 +35,6 @@ TRAIN_DATASET = None
 VAL_DATASET = None
 # Alternative approach: Store the best trial's seed for exact reproduction
 BEST_TRIAL_SEED = None
-
 
 @dataclass
 class VQVAEConfig:
@@ -433,8 +433,8 @@ def objective(trial):
     train_dataset, val_dataset = get_data_splits()
     
     # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True, num_workers=16)
+    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False, num_workers=16)
     
     # Initialize model and optimizer
     model = VQVAE(config)
@@ -491,8 +491,8 @@ def objective_with_trial_seeds(trial):
     train_dataset, val_dataset = get_data_splits()
     
     # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True, num_workers=16)
+    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False, num_workers=16)
     
     # Initialize model and optimizer
     model = VQVAE(config)
@@ -539,7 +539,7 @@ def run_optuna_optimization(n_trials=50, use_consistent_seed=True):
     
     # Choose objective function based on seed strategy
     if use_consistent_seed:
-        study.optimize(objective, n_trials=n_trials)
+        study.optimize(objective, n_trials=n_trials, n_jobs=4)  # Use single job for consistent seed
         best_seed = 42  # Consistent seed used
     else:
         study.optimize(objective_with_trial_seeds, n_trials=n_trials)
@@ -589,8 +589,8 @@ def evaluate_best_config_short(best_params, epochs=1, seed=42):
     train_dataset, val_dataset = get_data_splits()
     
     # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True, num_workers=16)
+    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False, num_workers=16)
     
     # Initialize model and optimizer
     model = VQVAE(config)
@@ -638,8 +638,8 @@ def train_with_best_config(best_params, seed=42):
     train_dataset, val_dataset = get_data_splits()
     
     # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True, num_workers=16)
+    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False, num_workers=16)
     
     # Initialize model and optimizer
     model = VQVAE(config)
@@ -662,6 +662,61 @@ def train_with_best_config(best_params, seed=42):
     
     logger.info("Final training completed!")
     return trainer, config
+
+def load_config_from_json(config_path: str) -> VQVAEConfig:
+    """Load VQVAEConfig from JSON file"""
+    with open(config_path, 'r') as f:
+        config_dict = json.load(f)
+    
+    # Convert list back to tuple for hidden_dims if needed
+    if 'hidden_dims' in config_dict:
+        config_dict['hidden_dims'] = tuple(config_dict['hidden_dims'])
+    
+    # Remove non-config fields if present
+    config_dict.pop('best_seed', None)
+    
+    return VQVAEConfig(**config_dict)
+
+def load_config_from_checkpoint(checkpoint_path: str, device: str = 'cpu') -> VQVAEConfig:
+    """Load VQVAEConfig from checkpoint file"""
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    
+    if 'config' in checkpoint and checkpoint['config'] is not None:
+        return checkpoint['config']
+    else:
+        raise ValueError("No config found in checkpoint file")
+
+def load_best_model(checkpoint_dir: str = './final_model_checkpoints', 
+                   device: str = None) -> tuple[VQVAE, VQVAEConfig]:
+    """Load the best model with its configuration"""
+    
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    # Try to load config from JSON first (more reliable)
+    json_config_path = os.path.join(checkpoint_dir, 'best_config.json')
+    checkpoint_path = os.path.join(checkpoint_dir, 'best_model.pth')
+    
+    if os.path.exists(json_config_path):
+        config = load_config_from_json(json_config_path)
+    elif os.path.exists(checkpoint_path):
+        config = load_config_from_checkpoint(checkpoint_path, device)
+    else:
+        raise FileNotFoundError("Neither config.json nor checkpoint file found")
+    
+    # Initialize model
+    model = VQVAE(config)
+    
+    # Load weights if checkpoint exists
+    if os.path.exists(checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        model.load_state_dict(checkpoint['model_state_dict'])
+    print(f"Model weights loaded from {checkpoint_path}")
+    
+    model.to(device)
+    model.eval()  # Set to evaluation mode
+    
+    return model, config
 
 if __name__ == "__main__":
     # Import required modules for main execution
