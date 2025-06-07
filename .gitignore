@@ -1,0 +1,4 @@
+src/model/data/*
+vqvae_checkpoints/*
+log/*
+data/*

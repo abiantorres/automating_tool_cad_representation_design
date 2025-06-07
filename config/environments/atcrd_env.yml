@@ -1,0 +1,16 @@
+name: atcrd_env
+channels:
+  - conda-forge
+  - dlr-sc  # Additional channel for pythonocc-core
+  - defaults
+dependencies:
+  - python=3.9
+  - numpy
+  - matplotlib
+  - pip
+  - pytest
+  - black
+  - flake8
+  - pythonocc-core  # Move from pip to conda
+  - pip:
+    - trimesh
